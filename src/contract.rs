@@ -7,7 +7,8 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{
-    AllPollsResponse, ExecuteMsg, InstantiateMsg, PollResponse, QueryMsg, VoteResponse, ConfigResponse,
+    AllPollsResponse, AllVotesByAddressResponse, ConfigResponse, ExecuteMsg, InstantiateMsg,
+    PollResponse, QueryMsg, VoteResponse,
 };
 use crate::state::{Ballot, Config, Poll, BALLOTS, CONFIG, POLLS};
 
@@ -187,7 +188,8 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::AllPolls {} => query_all_polls(deps, env),
         QueryMsg::Poll { poll_id } => query_poll(deps, env, &poll_id),
         QueryMsg::Vote { poll_id, address } => query_vote(deps, env, &poll_id, address),
-        QueryMsg::Config {} => query_config(deps, env)
+        QueryMsg::Config {} => query_config(deps, env),
+        QueryMsg::AllVotesByAddress { address } => query_all_votes_by_address(deps, env, address),
     }
 }
 
@@ -216,11 +218,21 @@ fn query_config(deps: Deps, _env: Env) -> StdResult<Binary> {
     to_binary(&ConfigResponse { config })
 }
 
+fn query_all_votes_by_address(deps: Deps, _env: Env, address: String) -> StdResult<Binary> {
+    let validated_address = deps.api.addr_validate(&address).unwrap();
+    let ballots = BALLOTS
+        .prefix(validated_address)
+        .range(deps.storage, None, None, Order::Ascending)
+        .collect::<StdResult<Vec<_>>>()?;
+    to_binary(&AllVotesByAddressResponse { ballots })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::contract::{execute, instantiate, query};
     use crate::msg::{
-        AllPollsResponse, ExecuteMsg, InstantiateMsg, PollResponse, QueryMsg, VoteResponse, ConfigResponse
+        AllPollsResponse, AllVotesByAddressResponse, ConfigResponse, ExecuteMsg, InstantiateMsg,
+        PollResponse, QueryMsg, VoteResponse,
     };
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{attr, from_binary};
@@ -282,7 +294,11 @@ mod tests {
         let res = execute(deps.as_mut(), env, info, msg).unwrap();
         assert_eq!(
             res.attributes,
-            vec![attr("action", "execute_create_poll"), attr("poll_id", "some_id".to_string()), attr("creator", ADDR1)]
+            vec![
+                attr("action", "execute_create_poll"),
+                attr("poll_id", "some_id".to_string()),
+                attr("creator", ADDR1)
+            ]
         )
     }
 
@@ -413,7 +429,11 @@ mod tests {
         let res = execute(deps.as_mut(), env, info.clone(), msg).unwrap();
         assert_eq!(
             res.attributes,
-            vec![attr("action", "execute_vote"), attr("poll_id", "some_id".to_string()), attr("voter", info.sender)]
+            vec![
+                attr("action", "execute_vote"),
+                attr("poll_id", "some_id".to_string()),
+                attr("voter", info.sender)
+            ]
         )
     }
 
@@ -566,6 +586,22 @@ mod tests {
     }
 
     #[test]
+    fn test_query_all_polls_but_there_are_no_polls_created() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info(ADDR1, &[]);
+        // Instantiate the contract
+        let msg = InstantiateMsg { admin: None };
+        let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // Query
+        let msg = QueryMsg::AllPolls {};
+        let bin = query(deps.as_ref(), env, msg).unwrap();
+        let res: AllPollsResponse = from_binary(&bin).unwrap();
+        assert_eq!(res.polls.len(), 0);
+    }
+
+    #[test]
     fn test_query_poll() {
         let mut deps = mock_dependencies();
         let env = mock_env();
@@ -651,13 +687,65 @@ mod tests {
     }
 
     #[test]
-    fn test_query_config() {
+    fn test_query_all_votes_by_address() {
         let mut deps = mock_dependencies();
         let env = mock_env();
         let info = mock_info(ADDR1, &[]);
         // Instantiate the contract
         let msg = InstantiateMsg { admin: None };
         let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // Create a poll 1
+        let msg = ExecuteMsg::CreatePoll {
+            poll_id: "some_id_1".to_string(),
+            question: "What's your favourite Cosmos coin?".to_string(),
+            options: vec![
+                "Cosmos Hub".to_string(),
+                "Juno".to_string(),
+                "Osmosis".to_string(),
+            ],
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // Create a poll 2
+        let msg = ExecuteMsg::CreatePoll {
+            poll_id: "some_id_2".to_string(),
+            question: "What's your favourite number?".to_string(),
+            options: vec!["1".to_string(), "2".to_string(), "3".to_string()],
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // Create a vote for poll 1
+        let msg = ExecuteMsg::Vote {
+            poll_id: "some_id_1".to_string(),
+            vote: "Juno".to_string(),
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // Create a vote for poll 2
+        let msg = ExecuteMsg::Vote {
+            poll_id: "some_id_2".to_string(),
+            vote: "1".to_string(),
+        };
+        let _res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // Query
+        let msg = QueryMsg::AllVotesByAddress {
+            address: ADDR1.to_string(),
+        };
+        let bin = query(deps.as_ref(), env, msg).unwrap();
+        let res: AllVotesByAddressResponse = from_binary(&bin).unwrap();
+        assert_eq!(res.ballots.len(), 2);
+    }
+
+    #[test]
+    fn test_query_config() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info(ADDR1, &[]);
+        // Instantiate the contract
+        let msg = InstantiateMsg { admin: None };
+        let _res = instantiate(deps.as_mut(), env.clone(), info, msg).unwrap();
 
         // Query for the Config
         let msg = QueryMsg::Config {};

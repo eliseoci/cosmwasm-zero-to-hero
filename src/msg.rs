@@ -1,4 +1,4 @@
-use crate::state::{Ballot, Poll, Config};
+use crate::state::{Ballot, Config, Poll};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +34,8 @@ pub enum QueryMsg {
     AllPolls {},
     Poll { poll_id: String },
     Vote { poll_id: String, address: String },
-    Config {}
+    Config {},
+    AllVotesByAddress { address: String },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -60,5 +61,10 @@ pub struct VoteResponse {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
 pub struct ConfigResponse {
-    pub config: Option<Config>
+    pub config: Option<Config>,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
+pub struct AllVotesByAddressResponse {
+    pub ballots: Vec<(String, Ballot)>,
 }
