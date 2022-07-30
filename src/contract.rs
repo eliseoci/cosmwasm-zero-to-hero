@@ -7,7 +7,7 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{
-    AllPollsResponse, ExecuteMsg, InstantiateMsg, PollResponse, QueryMsg, VoteResponse,
+    AllPollsResponse, ExecuteMsg, InstantiateMsg, PollResponse, QueryMsg, VoteResponse, ConfigResponse,
 };
 use crate::state::{Ballot, Config, Poll, BALLOTS, CONFIG, POLLS};
 
@@ -70,7 +70,7 @@ fn execute_create_poll(
     }
 
     let poll = Poll {
-        creator: info.sender,
+        creator: info.sender.clone(),
         question,
         options: opts,
     };
@@ -79,7 +79,8 @@ fn execute_create_poll(
 
     Ok(Response::new()
         .add_attribute("action", "execute_create_poll")
-        .add_attribute("poll_id", poll_id))
+        .add_attribute("poll_id", poll_id)
+        .add_attribute("creator", info.sender))
 }
 
 fn execute_vote(
@@ -96,7 +97,7 @@ fn execute_vote(
             // The poll exists
             BALLOTS.update(
                 deps.storage,
-                (info.sender, poll_id),
+                (info.sender.clone(), poll_id),
                 |ballot| -> StdResult<Ballot> {
                     match ballot {
                         Some(ballot) => {
@@ -135,7 +136,8 @@ fn execute_vote(
             POLLS.save(deps.storage, poll_id, &poll)?;
             Ok(Response::new()
                 .add_attribute("action", "execute_vote")
-                .add_attribute("poll_id", poll_id))
+                .add_attribute("poll_id", poll_id)
+                .add_attribute("voter", info.sender))
         }
         None => Err(ContractError::PollNotFound {}), // The poll does not exist so we just error
     }
@@ -185,6 +187,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::AllPolls {} => query_all_polls(deps, env),
         QueryMsg::Poll { poll_id } => query_poll(deps, env, &poll_id),
         QueryMsg::Vote { poll_id, address } => query_vote(deps, env, &poll_id, address),
+        QueryMsg::Config {} => query_config(deps, env)
     }
 }
 
@@ -208,11 +211,16 @@ fn query_vote(deps: Deps, _env: Env, poll_id: &str, address: String) -> StdResul
     to_binary(&VoteResponse { vote })
 }
 
+fn query_config(deps: Deps, _env: Env) -> StdResult<Binary> {
+    let config = CONFIG.may_load(deps.storage)?;
+    to_binary(&ConfigResponse { config })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::contract::{execute, instantiate, query};
     use crate::msg::{
-        AllPollsResponse, ExecuteMsg, InstantiateMsg, PollResponse, QueryMsg, VoteResponse,
+        AllPollsResponse, ExecuteMsg, InstantiateMsg, PollResponse, QueryMsg, VoteResponse, ConfigResponse
     };
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{attr, from_binary};
@@ -271,7 +279,11 @@ mod tests {
             ],
         };
 
-        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![attr("action", "execute_create_poll"), attr("poll_id", "some_id".to_string()), attr("creator", ADDR1)]
+        )
     }
 
     #[test]
@@ -398,7 +410,11 @@ mod tests {
             vote: "Juno".to_string(),
         };
 
-        let _res = execute(deps.as_mut(), env, info, msg).unwrap();
+        let res = execute(deps.as_mut(), env, info.clone(), msg).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![attr("action", "execute_vote"), attr("poll_id", "some_id".to_string()), attr("voter", info.sender)]
+        )
     }
 
     #[test]
@@ -632,5 +648,21 @@ mod tests {
         let bin = query(deps.as_ref(), env, msg).unwrap();
         let res: VoteResponse = from_binary(&bin).unwrap();
         assert!(res.vote.is_none());
+    }
+
+    #[test]
+    fn test_query_config() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info(ADDR1, &[]);
+        // Instantiate the contract
+        let msg = InstantiateMsg { admin: None };
+        let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // Query for the Config
+        let msg = QueryMsg::Config {};
+        let bin = query(deps.as_ref(), env, msg).unwrap();
+        let res: ConfigResponse = from_binary(&bin).unwrap();
+        assert!(res.config.is_some());
     }
 }
