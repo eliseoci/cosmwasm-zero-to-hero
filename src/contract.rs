@@ -50,6 +50,7 @@ pub fn execute(
         ExecuteMsg::Vote { poll_id, vote } => execute_vote(deps, env, info, &poll_id, vote),
         ExecuteMsg::DeletePoll { poll_id } => execute_delete_poll(deps, env, info, &poll_id),
         ExecuteMsg::RevokeVote { poll_id } => execute_revoke_vote(deps, env, info, &poll_id),
+        ExecuteMsg::ClosePoll { poll_id } => execute_close_poll(deps, env, info, &poll_id),
     }
 }
 
@@ -74,6 +75,7 @@ fn execute_create_poll(
         creator: info.sender.clone(),
         question,
         options: opts,
+        is_active: true,
     };
 
     POLLS.save(deps.storage, poll_id, &poll)?;
@@ -95,6 +97,9 @@ fn execute_vote(
 
     match poll {
         Some(mut poll) => {
+            if !poll.is_active {
+                return Err(ContractError::Unauthorized {});
+            }
             // The poll exists
             BALLOTS.update(
                 deps.storage,
@@ -179,6 +184,32 @@ fn execute_revoke_vote(
             }
         }
         None => Err(ContractError::PollNotFound {}),
+    }
+}
+
+fn execute_close_poll(
+    deps: DepsMut,
+    _env: Env, // _env as we won't be using it
+    info: MessageInfo,
+    poll_id: &str,
+) -> Result<Response, ContractError> {
+    let poll = POLLS.may_load(deps.storage, poll_id)?;
+    match poll {
+        Some(mut poll) => {
+            let config = CONFIG.load(deps.storage)?;
+            if info.sender == config.admin
+                || poll.creator == info.sender
+            {
+                poll.is_active = false;
+                POLLS.save(deps.storage, poll_id, &poll)?;
+                Ok(Response::new()
+                    .add_attribute("action", "execute_close_poll")
+                    .add_attribute("poll_id", poll_id))
+            } else {
+                Err(ContractError::Unauthorized {})
+            }
+        }
+        None => Err(ContractError::PollNotFound {})
     }
 }
 
@@ -472,6 +503,21 @@ mod tests {
             vote: "Luna".to_string(),
         };
         // Unwrap to assert error
+        let _err = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap_err();
+
+        // Close poll.
+        let msg = ExecuteMsg::ClosePoll {
+            poll_id: "some_id".to_string(),
+        };
+        // Unwrap to assert error
+        let _err = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // Vote on closed poll.
+        let msg = ExecuteMsg::Vote {
+            poll_id: "some_id".to_string(),
+            vote: "Juno".to_string(),
+        };
+        // Unwrap to assert error
         let _err = execute(deps.as_mut(), env, info, msg).unwrap_err();
     }
 
@@ -547,6 +593,83 @@ mod tests {
         };
 
         let _res = execute(deps.as_mut(), env, info, msg).unwrap_err();
+    }
+
+    #[test]
+    fn test_execute_close_poll_valid() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info = mock_info(ADDR1, &[]);
+        let msg = InstantiateMsg { admin: None };
+        let _res = instantiate(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        // execute msg
+        let msg = ExecuteMsg::CreatePoll {
+            poll_id: "some_id".to_string(),
+            question: "What's your favorite Cosmos coin?".to_string(),
+            options: vec![
+                "Cosmos Hub".to_string(),
+                "Juno".to_string(),
+                "Osmosis".to_string(),
+            ],
+        };
+
+        let _res = execute(deps.as_mut(), env.clone(), info.clone(), msg).unwrap();
+
+        let msg = ExecuteMsg::ClosePoll {
+            poll_id: "some_id".to_string(),
+        };
+
+        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("action", "execute_close_poll"),
+                attr("poll_id", "some_id".to_string())
+            ]
+        )
+    }
+
+    #[test]
+    fn test_execute_close_poll_invalid() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let info_create_poll_msg = mock_info(ADDR1, &[]);
+        let info_close_poll_msg = mock_info(ADDR2, &[]);
+        let msg = InstantiateMsg { admin: None };
+        let _res = instantiate(
+            deps.as_mut(),
+            env.clone(),
+            info_create_poll_msg.clone(),
+            msg,
+        )
+        .unwrap();
+
+        // execute msg
+        let msg = ExecuteMsg::CreatePoll {
+            poll_id: "some_id".to_string(),
+            question: "What's your favorite Cosmos coin?".to_string(),
+            options: vec![
+                "Cosmos Hub".to_string(),
+                "Juno".to_string(),
+                "Osmosis".to_string(),
+            ],
+        };
+
+        let _res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info_create_poll_msg,
+            msg,
+        )
+        .unwrap();
+
+        let msg = ExecuteMsg::ClosePoll {
+            poll_id: "some_id".to_string(),
+        };
+
+        let _res = execute(deps.as_mut(), env, info_close_poll_msg, msg).unwrap_err();
     }
 
     #[test]

@@ -26,6 +26,9 @@ pub enum ExecuteMsg {
     RevokeVote {
         poll_id: String,
     },
+    ClosePoll {
+        poll_id: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

@@ -14,6 +14,7 @@ pub struct Poll {
     pub creator: Addr,
     pub question: String,
     pub options: Vec<(String, u64)>,
+    pub is_active: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
